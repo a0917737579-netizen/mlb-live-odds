@@ -4,17 +4,16 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# 這是妳專屬的 API 金鑰
+# 潔米的專屬 API 金鑰
 API_KEY = '8844bf1615fcbdff71517122a6f7f53e'
 
 def get_mlb_data():
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
-    # 我們要求抓取：美國莊家、獨贏(h2h)、讓分(spreads)、大小球(totals)
     params = {
         "apiKey": API_KEY,
         "regions": "us", 
         "markets": "h2h,spreads,totals",
-        "oddsFormat": "american" # 使用美式賠率，比較符合一般看盤習慣
+        "oddsFormat": "american"
     }
     try:
         response = requests.get(url, params=params)
@@ -24,7 +23,6 @@ def get_mlb_data():
     except:
         return []
 
-# 把外國時間轉換成台灣時間的超好用小工具
 def format_tw_time(utc_time_str):
     try:
         utc_dt = datetime.strptime(utc_time_str, "%Y-%m-%dT%H:%M:%SZ")
@@ -33,7 +31,6 @@ def format_tw_time(utc_time_str):
     except:
         return utc_time_str
 
-# 第一層：大廳首頁 (所有今日對戰)
 @app.route('/')
 def index():
     games = get_mlb_data()
@@ -57,11 +54,11 @@ def index():
         <div class="game-list">
             {% for game in games %}
                 <a href="/game/{{ game.id }}" class="game-card">
-                    <div class="teams">{{ game.away_team }} @ {{ game.home_team }}</div>
-                    <div class="time">開打時間: {{ format_tw_time(game.commence_time) }} (台灣時間)</div>
+                    <div class="teams">{{ game.away_team }} (客) @ {{ game.home_team }} (主)</div>
+                    <div class="time">開打時間: {{ format_tw_time(game.commence_time) }}</div>
                 </a>
             {% else %}
-                <p>目前 API 沒有抓到近期的賽事資料，可能還沒開盤。</p>
+                <p>目前沒有抓到近期的賽事資料喔！</p>
             {% endfor %}
         </div>
     </body>
@@ -69,15 +66,33 @@ def index():
     """
     return render_template_string(html, games=games, format_tw_time=format_tw_time)
 
-# 第二層：單場深度解析室 (各大莊家盤口)
 @app.route('/game/<game_id>')
 def game_detail(game_id):
     games = get_mlb_data()
-    # 找出我們點擊的那場比賽
     game = next((g for g in games if g['id'] == game_id), None)
     
     if not game:
         return "<h2 style='color:white; text-align:center;'>找不到這場比賽的詳細資料</h2>"
+
+    # 幫潔米把複雜的莊家數據整理乾淨
+    bookies_info = []
+    for bookie in game.get('bookmakers', []):
+        info = {
+            'name': bookie['title'],
+            'time': format_tw_time(bookie['last_update']),
+            'h2h': '未開盤',
+            'spread': '未開盤',
+            'total': '未開盤'
+        }
+        for market in bookie.get('markets', []):
+            outcomes = market.get('outcomes', [])
+            if market['key'] == 'h2h':
+                info['h2h'] = "<br>".join([f"{o['name']}: <span style='color:#00ff00'>{o['price']}</span>" for o in outcomes])
+            elif market['key'] == 'spreads':
+                info['spread'] = "<br>".join([f"{o['name']}: {o.get('point', '')} (<span style='color:#00ff00'>{o['price']}</span>)" for o in outcomes])
+            elif market['key'] == 'totals':
+                info['total'] = "<br>".join([f"{o['name']}: {o.get('point', '')} (<span style='color:#00ff00'>{o['price']}</span>)" for o in outcomes])
+        bookies_info.append(info)
 
     html = """
     <html>
@@ -86,27 +101,36 @@ def game_detail(game_id):
         <style>
             body { background-color: #1a1a1a; color: white; font-family: Arial, sans-serif; text-align: center; }
             h2 { color: #00ff00; margin-top: 30px; }
-            table { margin: 30px auto; border-collapse: collapse; width: 85%; }
-            th, td { border: 1px solid #555; padding: 12px; text-align: center; }
-            th { background-color: #222; color: #00ff00; }
-            tr:nth-child(even) { background-color: #333; }
-            .back-btn { display: inline-block; margin-top: 20px; padding: 10px 20px; background-color: #555; color: white; text-decoration: none; border-radius: 5px; }
+            table { margin: 30px auto; border-collapse: collapse; width: 90%; background-color: #222;}
+            th, td { border: 1px solid #555; padding: 15px; text-align: center; line-height: 1.5; }
+            th { background-color: #111; color: #00ff00; font-size: 18px;}
+            tr:hover { background-color: #333; }
+            .bookie-name { font-weight: bold; color: #ffeb3b; font-size: 18px; }
+            .update-time { font-size: 12px; color: #aaa; }
+            .back-btn { display: inline-block; margin: 20px; padding: 10px 20px; background-color: #555; color: white; text-decoration: none; border-radius: 5px; }
             .back-btn:hover { background-color: #777; }
         </style>
     </head>
     <body>
-        <h2>{{ game.away_team }} @ {{ game.home_team }}</h2>
-        <p>各大莊家即時盤口 (初盤跳動追蹤功能準備中...)</p>
+        <h2>{{ game.away_team }} (客) @ {{ game.home_team }} (主)</h2>
+        <p>各大莊家即時盤口對比</p>
         
         <table>
             <tr>
-                <th>莊家 (Bookmaker)</th>
-                <th>更新時間</th>
+                <th>莊家</th>
+                <th>獨贏 (Moneyline)</th>
+                <th>讓分 (Spread)</th>
+                <th>大小分 (Total)</th>
             </tr>
-            {% for bookie in game.bookmakers %}
+            {% for bookie in bookies_info %}
             <tr>
-                <td style="font-weight: bold; color: #ffeb3b;">{{ bookie.title }}</td>
-                <td>{{ format_tw_time(bookie.last_update) }}</td>
+                <td>
+                    <div class="bookie-name">{{ bookie.name }}</div>
+                    <div class="update-time">更新: {{ bookie.time }}</div>
+                </td>
+                <td>{{ bookie.h2h | safe }}</td>
+                <td>{{ bookie.spread | safe }}</td>
+                <td>{{ bookie.total | safe }}</td>
             </tr>
             {% endfor %}
         </table>
@@ -115,7 +139,7 @@ def game_detail(game_id):
     </body>
     </html>
     """
-    return render_template_string(html, game=game, format_tw_time=format_tw_time)
+    return render_template_string(html, game=game, bookies_info=bookies_info)
 
 if __name__ == "__main__":
     app.run(debug=True)
